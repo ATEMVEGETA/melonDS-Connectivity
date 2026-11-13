@@ -8,7 +8,7 @@ IR, and Wii connectivity.
 - Local IR for Pokemon Black 2 / White 2, including the fix for a stall before saving.
 - Pokewalker support with nonblocking PocketWalker connection and an IR settings menu.
 - Per-game wireless compatibility for Pokemon Ranger, Relocator, and tested event
-  distribution cartridges. ROMs can open in either order.
+  distribution cartridges.
 - Union Room routing for independent local multiplayer groups and up to 100 local
   instances in one process. Each game still enforces its own player limit.
 - Wii connectivity with the matching [Wii-DS-Link Dolphin build](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.4).
