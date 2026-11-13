@@ -24,3 +24,11 @@ game or region are not claimed as tested. No games, BIOS, firmware dumps, or sav
 are included.
 
 This project is not affiliated with the melonDS or Dolphin teams or Nintendo.
+
+
+
+**Credits**
+
+Special thanks to the following developers for their work on IR connectivity:
+- [Ceravia](https://github.com/Ceravia) — For the original IR implementation in [melonDS-IR](https://github.com/Ceravia/melonDS-IR).
+- [DaveuRrr](https://github.com/DaveuRrr) — For further developing and improving the IR implementation in his [melonDS](https://github.com/DaveuRrr/melonDS) fork.
