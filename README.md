@@ -1,8 +1,7 @@
 # melonDS Connectivity
 
 An unofficial Windows x64 build based on melonDS 1.1. It combines local wireless,
-IR, and Wii connectivity while keeping the standard melonDS menus and controls.
-It does not include Playnite controls or launcher integration.
+IR, and Wii connectivity.
 
 **[Download melonDS 1.1 Connectivity r2](https://github.com/ATEMVEGETA/melonDS-Connectivity/releases/tag/v1.1-connectivity-r2)**
 
