@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2025 melonDS team
+    Copyright 2016-2023 melonDS team
 
     This file is part of melonDS.
 
@@ -18,6 +18,8 @@
 
 #ifndef WIFI_H
 #define WIFI_H
+#include <memory>
+#include "WifiBackend.h"
 
 #include "Savestate.h"
 
@@ -52,12 +54,11 @@ public:
         W_RXCnt = 0x030,
         W_WEPCnt = 0x032,
 
-        W_TRXPower = 0x034,
         W_PowerUS = 0x036,
         W_PowerTX = 0x038,
         W_PowerState = 0x03C,
         W_PowerForce = 0x040,
-        W_PowerDownCtrl = 0x48,
+        W_PowerUnk = 0x48,
 
         W_Random = 0x044,
 
@@ -173,125 +174,15 @@ public:
     const u8* GetMAC() const;
     const u8* GetBSSID() const;
 
+    // Applied only by a console reset, never in the middle of a radio session.
+    void RequestProfile(WifiProfile profile) { RequestedProfile = profile; }
+    WifiProfile GetProfile() const { return ActiveProfile; }
+
 private:
     melonDS::NDS& NDS;
-    u8 RAM[0x2000];
-    u16 IO[0x1000>>1];
-
-    static const u8 MPCmdMAC[6];
-    static const u8 MPReplyMAC[6];
-    static const u8 MPAckMAC[6];
-
-    static const int kTimerInterval = 8;
-    static const u32 kTimeCheckMask = ~(kTimerInterval - 1);
-
-    bool Enabled;
-    bool PowerOn;
-
-    s32 TimerError;
-
-    u16 Random;
-
-    // general, always-on microsecond counter
-    u64 USTimestamp;
-
-    u64 USCounter;
-    u64 USCompare;
-    bool BlockBeaconIRQ14;
-
-    u32 CmdCounter;
-
-    u8 BBRegs[0x100];
-    u8 BBRegsRO[0x100];
-
-    u8 RFVersion;
-    u32 RFRegs[0x40];
-
-    u32 RFChannelIndex[2];
-    u32 RFChannelData[14][2];
-    int CurChannel;
-
-    struct TXSlot
-    {
-        bool Valid;
-        u16 Addr;
-        u16 Length;
-        u8 Rate;
-        u8 CurPhase;
-        int CurPhaseTime;
-        u32 HalfwordTimeMask;
-    };
-
-    TXSlot TXSlots[6];
-    u8 TXBuffer[0x2000];
-
-    u8 RXBuffer[2048];
-    u32 RXBufferPtr;
-    int RXTime;
-    u32 RXHalfwordTimeMask;
-
-    u32 ComStatus; // 0=waiting for packets  1=receiving  2=sending
-    u32 TXCurSlot;
-    u32 RXCounter;
-
-    int MPReplyTimer;
-    u16 MPClientMask, MPClientFail;
-
-    u8 MPClientReplies[15*1024];
-
-    u16 MPLastSeqno;
-
-    int USUntilPowerOn;
-
-    // MULTIPLAYER SYNC APPARATUS
-    bool IsMP;
-    bool IsMPClient;
-    u64 NextSync;           // for clients: timestamp for next sync point
-    u64 RXTimestamp;
-
-    class WifiAP* WifiAP;
-
-    void ScheduleTimer(bool first);
-    void UpdatePowerOn();
-
-    void CheckIRQ(u16 oldflags);
-    void SetIRQ(u32 irq);
-    void SetIRQ13();
-    void SetIRQ14(int source);
-    void SetIRQ15();
-
-    void SetStatus(u32 status);
-
-    void UpdatePowerStatus(int power);
-
-    int PreambleLen(int rate) const;
-    u32 NumClients(u16 bitmask) const;
-    void IncrementTXCount(const TXSlot* slot);
-    void ReportMPReplyErrors(u16 clientfail);
-
-    void TXSendFrame(const TXSlot* slot, int num);
-    void StartTX_LocN(int nslot, int loc);
-    void StartTX_Cmd();
-    void StartTX_Beacon();
-    void FireTX();
-    void SendMPDefaultReply();
-    void SendMPReply(u16 clienttime, u16 clientmask);
-    void SendMPAck(u16 cmdcount, u16 clientfail);
-    bool ProcessTX(TXSlot* slot, int num);
-
-    void IncrementRXAddr(u16& addr, u16 inc = 2);
-    void StartRX();
-    void FinishRX();
-    void MPClientReplyRX(int client);
-    bool CheckRX(int type);
-
-    void MSTimer();
-
-    void ChangeChannel();
-
-    void RFTransfer_Type2();
-    void RFTransfer_Type3();
+    WifiProfile RequestedProfile = WifiProfile::Legacy;
+    WifiProfile ActiveProfile = WifiProfile::Legacy;
+    std::unique_ptr<WifiBackend> Backend;
 };
-
 }
 #endif

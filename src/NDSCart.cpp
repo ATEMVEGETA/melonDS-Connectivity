@@ -27,6 +27,11 @@
 #include "FATStorage.h"
 #include "Utils.h"
 
+#include <algorithm>
+#include <cstdarg>
+#include <cstdio>
+#include <string>
+
 namespace melonDS
 {
 using Platform::Log;
@@ -34,6 +39,29 @@ using Platform::LogLevel;
 
 namespace NDSCart
 {
+
+static std::string IRTraceBytes(const char* data, u32 len)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    std::string out;
+    u32 shown = std::min<u32>(len, 0x40);
+    out.reserve(shown * 3);
+    for (u32 i = 0; i < shown; i++)
+    {
+        if (i) out.push_back(' ');
+        u8 val = (u8)data[i];
+        out.push_back(hex[val >> 4]);
+        out.push_back(hex[val & 0xF]);
+    }
+    if (shown < len) out += " ...";
+    return out;
+}
+
+static void IRTrace(void* userdata, const char* fmt, ...)
+{
+    (void)userdata;
+    (void)fmt;
+}
 
 enum
 {
@@ -362,6 +390,14 @@ int CartCommon::ROMCommandStart(NDS& nds, NDSCartSlot& cartslot, const u8* cmd, 
 }
 
 void CartCommon::ROMCommandFinish(const u8* cmd, u8* data, u32 len)
+{
+}
+
+void CartCommon::SPISelect()
+{
+}
+
+void CartCommon::SPIRelease()
 {
 }
 
@@ -1113,7 +1149,11 @@ void CartRetailIR::Reset()
 {
     CartRetail::Reset();
 
+    Platform::IRClose(UserData);
     IRCmd = 0;
+    IRPos = 0;
+    memset(TxBuf, 0, sizeof(TxBuf));
+    memset(RxBuf, 0, sizeof(RxBuf));
 }
 
 void CartRetailIR::DoSavestate(Savestate* file)
@@ -1121,28 +1161,122 @@ void CartRetailIR::DoSavestate(Savestate* file)
     CartRetail::DoSavestate(file);
 
     file->Var8(&IRCmd);
+    file->Var32(&IRPos);
+    file->VarArray(TxBuf, sizeof(TxBuf));
+    file->VarArray(RxBuf, sizeof(RxBuf));
+    if (!file->Saving) Platform::IRClose(UserData);
+}
+
+void CartRetailIR::SPISelect()
+{
+    IRPos = 0;
+    IRTrace(UserData, "spi-select\n");
+}
+
+void CartRetailIR::SPIRelease()
+{
+    IRTrace(UserData, "spi-release cmd=%02X pos=%u\n", IRCmd, IRPos);
+    if (IRCmd == 0x02 && IRPos > 1)
+    {
+        u8 sendLen = (u8)std::min<u32>(IRPos - 1, sizeof(TxBuf));
+        SendIR(sendLen);
+        memset(TxBuf, 0, sizeof(TxBuf));
+    }
+}
+
+u8 CartRetailIR::SendIR(u8 len)
+{
+    IRTrace(UserData, "send-ir begin len=%u bytes=%s\n", len, IRTraceBytes(TxBuf, len).c_str());
+
+    if ((u8)TxBuf[0] == 0x5E)
+        Platform::Sleep(10000);
+
+    u8 sent = Platform::IRSendPacket(TxBuf, len, UserData);
+    IRTrace(UserData, "send-ir end len=%u sent=%u\n", len, sent);
+    return sent;
+}
+
+u8 CartRetailIR::ReadIR()
+{
+    memset(RxBuf, 0, sizeof(RxBuf));
+
+    char tempBuf[0xB8];
+    u8 pointer = 0;
+
+    int len = Platform::IRReceivePacket(tempBuf, sizeof(tempBuf), UserData);
+    u64 lastRxTime = Platform::GetUSCount();
+
+    if (len > 0)
+    {
+        lastRxTime = Platform::GetUSCount();
+        int copyLen = std::min<int>(len, sizeof(RxBuf) - pointer);
+        memcpy(&RxBuf[pointer], tempBuf, copyLen);
+        pointer += (u8)copyLen;
+
+        while (true)
+        {
+            u64 diff = Platform::GetUSCount() - lastRxTime;
+            if (diff > 3500)
+                break;
+
+            len = Platform::IRReceivePacket(tempBuf, sizeof(tempBuf), UserData);
+            if (len <= 0)
+                continue;
+
+            lastRxTime = Platform::GetUSCount();
+            copyLen = std::min<int>(len, sizeof(RxBuf) - pointer);
+            memcpy(&RxBuf[pointer], tempBuf, copyLen);
+            pointer += (u8)copyLen;
+            if (pointer >= sizeof(RxBuf))
+                break;
+        }
+    }
+
+    IRTrace(UserData, "read-ir end total=%u bytes=%s\n", pointer, IRTraceBytes(RxBuf, pointer).c_str());
+    return pointer;
 }
 
 u8 CartRetailIR::SPIWrite(u8 val, u32 pos, bool last)
 {
-    if (pos == 0)
+    if (IRPos == 0)
     {
         IRCmd = val;
+        IRPos++;
+        IRTrace(UserData, "spi-cmd %02X last=%d\n", IRCmd, last ? 1 : 0);
         return 0;
     }
 
-    // TODO: emulate actual IR comm
-
+    u8 ret = 0;
     switch (IRCmd)
     {
     case 0x00: // pass-through
-        return CartRetail::SPIWrite(val, pos-1, last);
+        ret = CartRetail::SPIWrite(val, pos-1, last);
+        break;
+
+    case 0x01: // read
+        if (IRPos == 1)
+            ret = ReadIR();
+        else if (IRPos - 2 < sizeof(RxBuf))
+            ret = (u8)RxBuf[IRPos - 2];
+        if (IRPos <= 3 || last)
+            IRTrace(UserData, "spi-read pos=%u val=%02X ret=%02X last=%d\n", IRPos, val, ret, last ? 1 : 0);
+        break;
+
+    case 0x02: // write
+        if (IRPos - 1 < sizeof(TxBuf))
+            TxBuf[IRPos - 1] = (char)val;
+        ret = 0;
+        if (IRPos <= 3 || last)
+            IRTrace(UserData, "spi-write pos=%u val=%02X last=%d\n", IRPos, val, last ? 1 : 0);
+        break;
 
     case 0x08: // ID
-        return 0xAA;
+        ret = 0xAA;
+        break;
     }
 
-    return 0;
+    IRPos++;
+    return ret;
 }
 
 CartRetailBT::CartRetailBT(const u8* rom, u32 len, u32 chipid, ROMListEntry romparams, std::unique_ptr<u8[]>&& sram, u32 sramlen, void* userdata) :
@@ -1982,6 +2116,7 @@ void NDSCartSlot::WriteSPICnt(u16 val) noexcept
     if ((SPICnt & 0x2040) == 0x2040 && (val & 0x2000) == 0x0000)
     {
         // forcefully reset SPI hold
+        if (Cart) Cart->SPIRelease();
         SPIHold = false;
     }
 
@@ -2021,7 +2156,11 @@ void NDSCartSlot::WriteSPIData(u8 val) noexcept
     if (!hold)
     {
         if (SPIHold) SPIDataPos++;
-        else         SPIDataPos = 0;
+        else
+        {
+            SPIDataPos = 0;
+            if (Cart) Cart->SPISelect();
+        }
         islast = true;
         SPIHold = false;
     }
@@ -2029,6 +2168,7 @@ void NDSCartSlot::WriteSPIData(u8 val) noexcept
     {
         SPIHold = true;
         SPIDataPos = 0;
+        if (Cart) Cart->SPISelect();
     }
     else
     {
@@ -2037,6 +2177,8 @@ void NDSCartSlot::WriteSPIData(u8 val) noexcept
 
     if (Cart) SPIData = Cart->SPIWrite(val, SPIDataPos, islast);
     else      SPIData = 0;
+
+    if (islast && Cart) Cart->SPIRelease();
 
     // SPI transfers one bit per cycle -> 8 cycles per byte
     u32 delay = 8 * (8 << (SPICnt & 0x3));

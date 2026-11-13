@@ -41,7 +41,7 @@ void Net::UnregisterInstance(int inst)
 
 void Net::RXEnqueue(const void* buf, int len)
 {
-    Dispatcher.sendPacket(nullptr, 0, buf, len, 16, 0xFFFF);
+    Dispatcher.sendPacket(nullptr, 0, buf, len, kMaxLocalInstances, InstanceMask::All());
 }
 
 

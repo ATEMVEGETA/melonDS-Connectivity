@@ -72,6 +72,11 @@ DefaultList<int> DefaultInts =
     {"Instance*.Gdb.ARM9.Port", 3333},
 #endif
     {"LAN.HostNumPlayers", 16},
+    {"Instance*.IR.Mode", 0},
+    {"Instance*.IR.Network.SelfPort", 8081},
+    {"Instance*.IR.Network.HostPort", 8081},
+    {"Instance*.IR.Serial.ReadTimeoutUs", 500},
+    {"Instance*.IR.Serial.SendDelayUs", 0},
 };
 
 RangeList IntRanges =
@@ -91,6 +96,11 @@ RangeList IntRanges =
     {"Instance*.Window*.ScreenAspectBot", {0, AspectRatiosNum-1}},
     {"MP.AudioMode", {0, 2}},
     {"LAN.HostNumPlayers", {2, 16}},
+    {"Instance*.IR.Mode", {0, 3}},
+    {"Instance*.IR.Network.SelfPort", {1, 65535}},
+    {"Instance*.IR.Network.HostPort", {1, 65535}},
+    {"Instance*.IR.Serial.ReadTimeoutUs", {0, 10000}},
+    {"Instance*.IR.Serial.SendDelayUs", {0, 10000}},
 };
 
 DefaultList<bool> DefaultBools =
@@ -111,10 +121,15 @@ DefaultList<bool> DefaultBools =
 #endif
 #endif
     {"DSi.DSP.HLE", true},
+    {"Instance*.WiiDS.Enabled", false},
+    {"Instance*.WiiDS.Automatic", false},
+    {"Instance*.WiiDS.Diagnostics", false},
+    {"Instance*.IR.Network.IsServer", true},
 };
 
 DefaultList<std::string> DefaultStrings =
 {
+    {"Instance*.IR.Network.HostIP", "127.0.0.1"},
     {"DLDI.ImagePath",                  "dldi.bin"},
     {"DSi.SD.ImagePath",                "dsisd.bin"},
     {"Instance*.Firmware.Username",     "melonDS"}

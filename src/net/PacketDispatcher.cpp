@@ -33,7 +33,6 @@ const u32 kPacketMagic = 0x4B504C4D;
 
 PacketDispatcher::PacketDispatcher() : mutex(Platform::Mutex_Create())
 {
-    instanceMask = 0;
 }
 
 PacketDispatcher::~PacketDispatcher()
@@ -44,9 +43,9 @@ PacketDispatcher::~PacketDispatcher()
 
 void PacketDispatcher::registerInstance(int inst)
 {
+    if (inst < 0 || inst >= kMaxLocalInstances) return;
     Mutex_Lock(mutex);
 
-    instanceMask |= (1 << inst);
     packetQueues[inst] = std::make_unique<PacketQueue>();
 
     Mutex_Unlock(mutex);
@@ -54,9 +53,9 @@ void PacketDispatcher::registerInstance(int inst)
 
 void PacketDispatcher::unregisterInstance(int inst)
 {
+    if (inst < 0 || inst >= kMaxLocalInstances) return;
     Mutex_Lock(mutex);
 
-    instanceMask &= ~(1 << inst);
     packetQueues[inst] = nullptr;
 
     Mutex_Unlock(mutex);
@@ -66,9 +65,9 @@ void PacketDispatcher::unregisterInstance(int inst)
 void PacketDispatcher::clear()
 {
     Mutex_Lock(mutex);
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < kMaxLocalInstances; i++)
     {
-        if (!(instanceMask & (1 << i)))
+        if (!packetQueues[i])
             continue;
 
         packetQueues[i]->Clear();
@@ -77,17 +76,13 @@ void PacketDispatcher::clear()
 }
 
 
-void PacketDispatcher::sendPacket(const void* header, int headerlen, const void* data, int datalen, int sender, u16 recv_mask)
+void PacketDispatcher::sendPacket(const void* header, int headerlen, const void* data, int datalen, int sender, const InstanceMask& recv_mask)
 {
     if (!header) headerlen = 0;
     if (!data) datalen = 0;
     if ((!headerlen) && (!datalen)) return;
     if ((sizeof(PacketHeader) + headerlen + datalen) >= 0x8000) return;
-    if (sender < 0 || sender > 16) return;
-
-    recv_mask &= instanceMask;
-    if (sender < 16) recv_mask &= ~(1 << sender);
-    if (!recv_mask) return;
+    if (sender < 0 || sender > kMaxLocalInstances) return;
 
     PacketHeader phdr;
     phdr.magic = kPacketMagic;
@@ -98,9 +93,9 @@ void PacketDispatcher::sendPacket(const void* header, int headerlen, const void*
     int totallen = sizeof(phdr) + headerlen + datalen;
 
     Mutex_Lock(mutex);
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < kMaxLocalInstances; i++)
     {
-        if (!(recv_mask & (1 << i)))
+        if (i == sender || !recv_mask.Test(i) || !packetQueues[i])
             continue;
 
         PacketQueue* queue = packetQueues[i].get();
@@ -123,10 +118,15 @@ void PacketDispatcher::sendPacket(const void* header, int headerlen, const void*
 bool PacketDispatcher::recvPacket(void *header, int *headerlen, void *data, int *datalen, int receiver)
 {
     if ((!header) && (!data)) return false;
-    if (receiver < 0 || receiver > 15) return false;
+    if (receiver < 0 || receiver >= kMaxLocalInstances) return false;
 
     Mutex_Lock(mutex);
     PacketQueue* queue = packetQueues[receiver].get();
+    if (!queue)
+    {
+        Mutex_Unlock(mutex);
+        return false;
+    }
 
     PacketHeader phdr;
     if (!queue->Read(&phdr, sizeof(phdr)))

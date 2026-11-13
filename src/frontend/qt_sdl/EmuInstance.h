@@ -100,6 +100,9 @@ public:
 
     Config::Table& getGlobalConfig() { return globalCfg; }
     Config::Table& getLocalConfig() { return localCfg; }
+    void applyWiiDSSettings();
+    void setWiiDSLaunchOverride(std::optional<bool> enabled);
+    std::optional<bool> getWiiDSLaunchOverride() const { return wiiDSLaunchOverride; }
 
     void broadcastCommand(int cmd, QVariant param = QVariant());
     void handleCommand(int cmd, QVariant& param);
@@ -268,6 +271,7 @@ private:
 
     Config::Table globalCfg;
     Config::Table localCfg;
+    std::optional<bool> wiiDSLaunchOverride;
 
     int consoleType;
     melonDS::NDS* nds;

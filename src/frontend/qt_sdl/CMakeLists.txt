@@ -28,6 +28,7 @@ set(SOURCES_QT_SDL
     PathSettingsDialog.cpp
     MPSettingsDialog.cpp
     WifiSettingsDialog.cpp
+    IRSettingsDialog.cpp
     InterfaceSettingsDialog.cpp
     ROMInfoDialog.cpp
     RAMInfoDialog.cpp
@@ -35,6 +36,7 @@ set(SOURCES_QT_SDL
     OSD_shaders.h
     font.h
     Platform.cpp
+    Platform_IR.cpp
     Platform_AAC.cpp
     QPathInput.h
     SaveManager.cpp

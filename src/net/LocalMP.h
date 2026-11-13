@@ -22,16 +22,20 @@
 #include "types.h"
 #include "Platform.h"
 #include "MPInterface.h"
+#include "InstanceMask.h"
+
+#include <array>
+#include <memory>
 
 namespace melonDS
 {
+constexpr int kMaxLocalMPInstances = kMaxLocalInstances;
+
 struct MPStatusData
 {
-    u16 ConnectedBitmask; // bitmask of which instances are ready to send/receive packets
+    InstanceMask ConnectedBitmask; // local radios, not guest AIDs
     u32 PacketWriteOffset;
-    u32 ReplyWriteOffset;
-    u16 MPHostinst; // instance ID from which the last CMD frame was sent
-    u16 MPReplyBitmask;   // bitmask of which clients replied in time
+    u32 ReplyWriteOffset[kMaxLocalMPInstances];
 };
 
 constexpr u32 kPacketQueueSize = 0x10000;
@@ -70,12 +74,16 @@ private:
     Platform::Mutex* MPQueueLock;
     MPStatusData MPStatus {};
     u8 MPPacketQueue[kPacketQueueSize] {};
-    u8 MPReplyQueue[kReplyQueueSize] {};
-    u32 PacketReadOffset[16] {};
-    u32 ReplyReadOffset[16] {};
+    std::unique_ptr<u8[]> MPReplyQueue;
+    u32 PacketReadOffset[kMaxLocalMPInstances] {};
+    u32 PacketPendingBytes[kMaxLocalMPInstances] {};
+    u32 ReplyReadOffset[kMaxLocalMPInstances] {};
 
-    int LastHostID = -1;
-    Platform::Semaphore* SemPool[32] {};
+    std::array<int, kMaxLocalMPInstances> LastHostIDs;
+    std::array<std::array<u8, 6>, kMaxLocalMPInstances> LocalMACs {};
+    std::array<std::array<u8, 6>, kMaxLocalMPInstances> HostMACs {};
+    std::array<bool, kMaxLocalMPInstances> Associated {};
+    Platform::Semaphore* SemPool[kMaxLocalMPInstances * 2] {};
 };
 }
 

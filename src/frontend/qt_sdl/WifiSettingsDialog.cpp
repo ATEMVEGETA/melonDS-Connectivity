@@ -52,7 +52,18 @@ WifiSettingsDialog::WifiSettingsDialog(QWidget* parent) : QDialog(parent), ui(ne
     setAttribute(Qt::WA_DeleteOnClose);
 
     emuInstance = ((MainWindow*)parent)->getEmuInstance();
+    canEditSharedNetwork = emuInstance->getInstanceID() == 0;
+    setWindowTitle(QString("Wifi settings - melonDS (instance %1)").arg(emuInstance->getInstanceID() + 1));
     auto& cfg = emuInstance->getGlobalConfig();
+    auto& localCfg = emuInstance->getLocalConfig();
+    const auto launchOverride = emuInstance->getWiiDSLaunchOverride();
+    ui->chkWiiDS->setChecked(launchOverride.value_or(localCfg.GetBool("WiiDS.Automatic")));
+    // The guest radio must be stopped before changing transport ownership.
+    // Do not reset an unsaved game merely to change this preference.
+    ui->chkWiiDS->setEnabled(!emuInstance->getEmuThread()->emuIsActive() && !launchOverride.has_value());
+    if (launchOverride.has_value())
+        ui->chkWiiDS->setToolTip("A command-line Wii-DS option controls this launch. Restart without the override to change the saved option.");
+    ui->chkWiiDSDiagnostics->setChecked(localCfg.GetBool("WiiDS.Diagnostics"));
 
     if (!pcap)
         pcap = melonDS::LibPCap::New();
@@ -66,7 +77,7 @@ WifiSettingsDialog::WifiSettingsDialog(QWidget* parent) : QDialog(parent), ui(ne
     ui->lblAdapterMAC->setText("(none)");
     ui->lblAdapterIP->setText("(none)");
 
-    int sel = 0;
+    int sel = -1;
     for (int i = 0; i < adapters.size(); i++)
     {
         melonDS::AdapterData& adapter = adapters[i];
@@ -85,10 +96,21 @@ WifiSettingsDialog::WifiSettingsDialog(QWidget* parent) : QDialog(parent), ui(ne
     if (!haspcap) ui->rbDirectMode->setEnabled(false);
 
     updateAdapterControls();
+    initialDirectMode = ui->rbDirectMode->isChecked();
+    initialAdapterIndex = ui->cbxDirectAdapter->currentIndex();
+
+    if (!canEditSharedNetwork)
+    {
+        ui->groupBox->setEnabled(false);
+        ui->groupBox_3->setEnabled(false);
+        ui->label_4->setText("Online network settings are shared by all instances. Change them from the first instance. The Dolphin Wii connection above applies to this instance only.");
+    }
 }
 
 WifiSettingsDialog::~WifiSettingsDialog()
 {
+    if (currentDlg == this)
+        closeDlg();
     delete ui;
 }
 
@@ -103,30 +125,43 @@ void WifiSettingsDialog::done(int r)
 
     needsReset = false;
 
+    bool sharedNetworkChanged = false;
     if (r == QDialog::Accepted)
     {
-        auto& cfg = emuInstance->getGlobalConfig();
-
-        cfg.SetBool("LAN.DirectMode", ui->rbDirectMode->isChecked());
-
-        int sel = ui->cbxDirectAdapter->currentIndex();
-        if (sel < 0 || sel >= adapters.size()) sel = 0;
-        if (adapters.empty())
+        if (canEditSharedNetwork &&
+            (ui->rbDirectMode->isChecked() != initialDirectMode ||
+             ui->cbxDirectAdapter->currentIndex() != initialAdapterIndex))
         {
-            cfg.SetString("LAN.Device", "");
-        }
-        else
-        {
-            cfg.SetString("LAN.Device", adapters[sel].DeviceName);
+            auto& cfg = emuInstance->getGlobalConfig();
+            int sel = ui->cbxDirectAdapter->currentIndex();
+            std::string device = cfg.GetString("LAN.Device");
+            if (sel != initialAdapterIndex)
+                device = sel < 0 || sel >= adapters.size() ? "" : adapters[sel].DeviceName;
+            const bool direct = ui->rbDirectMode->isChecked();
+            sharedNetworkChanged = cfg.GetBool("LAN.DirectMode") != direct ||
+                                   cfg.GetString("LAN.Device") != device;
+            if (sharedNetworkChanged)
+            {
+                cfg.SetBool("LAN.DirectMode", direct);
+                cfg.SetString("LAN.Device", device);
+            }
         }
 
+        auto& localCfg = emuInstance->getLocalConfig();
+        if (ui->chkWiiDS->isEnabled())
+        {
+            localCfg.SetBool("WiiDS.Automatic", ui->chkWiiDS->isChecked());
+            localCfg.SetBool("WiiDS.Enabled", false);
+        }
+        localCfg.SetBool("WiiDS.Diagnostics", ui->chkWiiDSDiagnostics->isChecked());
+        emuInstance->applyWiiDSSettings();
         Config::Save();
     }
 
-    Config::Table cfg = Config::GetGlobalTable();
-    std::string devicename = cfg.GetString("LAN.Device");
-
-    NetInit();
+    // Local Wii-link changes (and Cancel) must not restart every instance's
+    // shared online network backend.
+    if (sharedNetworkChanged)
+        NetInit();
 
     QDialog::done(r);
 

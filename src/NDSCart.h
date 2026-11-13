@@ -92,6 +92,8 @@ public:
     virtual int ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, const u8* cmd, u8* data, u32 len);
     virtual void ROMCommandFinish(const u8* cmd, u8* data, u32 len);
 
+    virtual void SPISelect();
+    virtual void SPIRelease();
     virtual u8 SPIWrite(u8 val, u32 pos, bool last);
 
     virtual u8* GetSaveMemory() { return nullptr; }
@@ -228,11 +230,19 @@ public:
 
     void DoSavestate(Savestate* file) override;
 
+    void SPISelect() override;
+    void SPIRelease() override;
     u8 SPIWrite(u8 val, u32 pos, bool last) override;
 
 private:
+    u8 SendIR(u8 len);
+    u8 ReadIR();
+
     u32 IRVersion = 0;
     u8 IRCmd = 0;
+    u32 IRPos = 0;
+    char TxBuf[0x88] {};
+    char RxBuf[0x88] {};
 };
 
 // CartRetailBT - Pok�mon Typing Adventure (SPI BT controller)

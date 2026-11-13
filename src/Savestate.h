@@ -32,6 +32,9 @@ enum
 {
     SC_Console_DSi      = (1<<0),
     SC_DSi_DSPHLE       = (1<<16),
+    SC_WifiProfiles     = (1<<17),
+    SC_WifiRanger       = (1<<18),
+    SC_ConnectivityIR   = (1<<19),
 };
 
 namespace melonDS

@@ -9,6 +9,9 @@ add_library(net-utils STATIC
     LAN.cpp
     Netplay.cpp
     MPInterface.cpp
+    WiiDSBridge.cpp
+    IRTransport.cpp
+    IRSerial.cpp
 )
 
 target_include_directories(net-utils PUBLIC

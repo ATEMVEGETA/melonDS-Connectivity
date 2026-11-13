@@ -615,7 +615,9 @@ void NDS::Stop(Platform::StopReason reason)
 
 u32 NDS::GetSavestateConfig()
 {
-    u32 ret = 0;
+    // The two radio layouts are not interchangeable, including older states.
+    u32 ret = SC_WifiProfiles | SC_ConnectivityIR;
+    if (Wifi.GetProfile() == WifiProfile::Ranger) ret |= SC_WifiRanger;
 
     if (ConsoleType == 1)
         ret |= SC_Console_DSi;

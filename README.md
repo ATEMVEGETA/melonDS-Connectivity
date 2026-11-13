@@ -1,71 +1,27 @@
-<p align="center"><img src="https://raw.githubusercontent.com/melonDS-emu/melonDS/master/res/icon/melon_128x128.png"></p>
-<h2 align="center"><b>melonDS</b></h2>
-<p align="center">
-<a href="http://melonds.kuribo64.net/" alt="melonDS website"><img src="https://img.shields.io/badge/website-melonds.kuribo64.net-%2331352e.svg"></a>
-<a href="http://melonds.kuribo64.net/downloads.php" alt="Release: 1.1"><img src="https://img.shields.io/badge/release-1.1-%235c913b.svg"></a>
-<a href="https://www.gnu.org/licenses/gpl-3.0" alt="License: GPLv3"><img src="https://img.shields.io/badge/License-GPL%20v3-%23ff554d.svg"></a>
-<a href="https://kiwiirc.com/client/irc.badnik.net/?nick=IRC-Source_?#melonds" alt="IRC channel: #melonds"><img src="https://img.shields.io/badge/IRC%20chat-%23melonds-%23dd2e44.svg"></a>
-<a href="https://discord.gg/pAMAtExcqV" alt="Discord"><img src="https://img.shields.io/badge/Discord-Kuribo64-7289da?logo=discord&logoColor=white"></a>
-<br>
-<a href="https://github.com/melonDS-emu/melonDS/actions/workflows/build-windows.yml?query=event%3Apush"><img src="https://github.com/melonDS-emu/melonDS/actions/workflows/build-windows.yml/badge.svg" /></a>
-<a href="https://github.com/melonDS-emu/melonDS/actions/workflows/build-ubuntu.yml?query=event%3Apush"><img src="https://github.com/melonDS-emu/melonDS/actions/workflows/build-ubuntu.yml/badge.svg" /></a>
-<a href="https://github.com/melonDS-emu/melonDS/actions/workflows/build-macos.yml?query=event%3Apush"><img src="https://github.com/melonDS-emu/melonDS/actions/workflows/build-macos.yml/badge.svg" /></a>
-<a href="https://github.com/melonDS-emu/melonDS/actions/workflows/build-bsd.yml?query=event%3Apush"><img src="https://github.com/melonDS-emu/melonDS/actions/workflows/build-bsd.yml/badge.svg" /></a>
-</p>
-DS emulator, sorta
+# melonDS Connectivity
 
-The goal is to do things right and fast, akin to blargSNES (but hopefully better). But also to, you know, have a fun challenge :)
-<hr>
+An unofficial Windows x64 build based on melonDS 1.1. It combines local wireless,
+IR, and Wii connectivity while keeping the standard melonDS menus and controls.
+It does not include Playnite controls or launcher integration.
 
-## How to use
+**[Download melonDS 1.1 Connectivity r2](https://github.com/ATEMVEGETA/melonDS-Connectivity/releases/tag/v1.1-connectivity-r2)**
 
-Firmware boot (not direct boot) requires a BIOS/firmware dump from an original DS or DS Lite.
-DS firmwares dumped from a DSi or 3DS aren't bootable and only contain configuration data, thus they are only suitable when booting games directly.
+- Local IR for Pokemon Black 2 / White 2, including the fix for a stall before saving.
+- Pokewalker support with nonblocking PocketWalker connection and an IR settings menu.
+- Per-game wireless compatibility for Pokemon Ranger, Relocator, and tested event
+  distribution cartridges. ROMs can open in either order.
+- Union Room routing for independent local multiplayer groups and up to 100 local
+  instances in one process. Each game still enforces its own player limit.
+- Wii connectivity with the matching [Wii-DS-Link Dolphin build](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.4).
+  Stock Dolphin does not implement this bridge. The Wii-DS-Link paired release is unchanged.
 
-### Possible firmware sizes
+See [connection setup and save behavior](CONNECTIVITY.md), [Windows release build
+instructions](RELEASE-BUILD.md), and [the upstream license](LICENSE). Keep backups of
+in-game saves when switching builds. Savestates are not interchangeable across radio profiles.
 
- * 128KB: DSi/3DS DS-mode firmware (reduced size due to lacking bootcode)
- * 256KB: regular DS firmware
- * 512KB: iQue DS firmware
+Windows testing confirmed the Ranger transfer with Ranger opened second and ROM
+reload after a Wii connection. Linux, macOS, physical serial adapters, and every
+game or region are not claimed as tested. No games, BIOS, firmware dumps, or saves
+are included.
 
-DS BIOS dumps from a DSi or 3DS can be used with no compatibility issues. DSi BIOS dumps (in DSi mode) are not compatible. Or maybe they are. I don't know.
-
-As for the rest, the interface should be pretty straightforward. If you have a question, don't hesitate to ask, though!
-
-## How to build
-See [BUILD.md](./BUILD.md) for build instructions.
-
-## TODO LIST
-
- * better DSi emulation
- * better OpenGL rendering
- * netplay
- * the impossible quest of pixel-perfect 3D graphics
- * support for rendering screens to separate windows
- * emulating some fancy addons
- * other non-core shit (debugger, graphics viewers, etc)
-
-### TODO LIST FOR LATER (low priority)
-
- * big-endian compatibility (Wii, etc)
- * LCD refresh time (used by some games for blending effects)
- * any feature you can eventually ask for that isn't outright stupid
-
-## Credits
-
- * Martin for GBAtek, a good piece of documentation
- * Cydrak for the extra 3D GPU research
- * limittox for the icon
- * All of you comrades who have been testing melonDS, reporting issues, suggesting shit, etc
-
-## Licenses
-
-[![GNU GPLv3 Image](https://www.gnu.org/graphics/gplv3-127x51.png)](http://www.gnu.org/licenses/gpl-3.0.en.html)
-
-melonDS is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-### External
-* Images used in the Input Config Dialog - see `src/frontend/qt_sdl/InputConfig/resources/LICENSE.md`
+This project is not affiliated with the melonDS or Dolphin teams or Nintendo.

@@ -17,6 +17,7 @@
 */
 
 #include <cstring>
+#include <chrono>
 
 #include "LocalMP.h"
 
@@ -28,21 +29,34 @@ using Platform::LogLevel;
 
 namespace melonDS
 {
+static bool ValidInstance(int inst)
+{
+    return inst >= 0 && inst < kMaxLocalMPInstances;
+}
+
+static u16 FrameControl(const u8* packet, int len)
+{
+    return packet && len >= 14 ? u16(packet[12]) | (u16(packet[13]) << 8) : 0xFFFF;
+}
+
+static void ResetSemaphore(Semaphore* semaphore)
+{
+    while (Semaphore_TryWait(semaphore, 0)) {}
+}
 
 LocalMP::LocalMP() noexcept :
-    MPQueueLock(Mutex_Create())
+    MPQueueLock(Mutex_Create()),
+    MPReplyQueue(std::make_unique<u8[]>(kMaxLocalMPInstances * kReplyQueueSize))
 {
     memset(MPPacketQueue, 0, kPacketQueueSize);
-    memset(MPReplyQueue, 0, kReplyQueueSize);
     memset(&MPStatus, 0, sizeof(MPStatus));
     memset(PacketReadOffset, 0, sizeof(PacketReadOffset));
     memset(ReplyReadOffset, 0, sizeof(ReplyReadOffset));
 
-    // prepare semaphores
-    // semaphores 0-15: regular frames; semaphore I is posted when instance I needs to process a new frame
-    // semaphores 16-31: MP replies; semaphore I is posted when instance I needs to process a new MP reply
+    LastHostIDs.fill(-1);
 
-    for (int i = 0; i < 32; i++)
+    // Each radio has a packet semaphore and its own parent's reply semaphore.
+    for (int i = 0; i < kMaxLocalMPInstances * 2; i++)
     {
         SemPool[i] = Semaphore_Create();
     }
@@ -52,7 +66,7 @@ LocalMP::LocalMP() noexcept :
 
 LocalMP::~LocalMP() noexcept
 {
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < kMaxLocalMPInstances * 2; i++)
     {
         Semaphore_Free(SemPool[i]);
         SemPool[i] = nullptr;
@@ -63,19 +77,26 @@ LocalMP::~LocalMP() noexcept
 
 void LocalMP::Begin(int inst)
 {
+    if (!ValidInstance(inst)) return;
     Mutex_Lock(MPQueueLock);
     PacketReadOffset[inst] = MPStatus.PacketWriteOffset;
-    ReplyReadOffset[inst] = MPStatus.ReplyWriteOffset;
-    Semaphore_Reset(SemPool[inst]);
-    Semaphore_Reset(SemPool[16 + inst]);
-    MPStatus.ConnectedBitmask |= (1 << inst);
+    PacketPendingBytes[inst] = 0;
+    ReplyReadOffset[inst] = MPStatus.ReplyWriteOffset[inst];
+    LastHostIDs[inst] = -1;
+    Associated[inst] = false;
+    ResetSemaphore(SemPool[inst]);
+    ResetSemaphore(SemPool[kMaxLocalMPInstances + inst]);
+    MPStatus.ConnectedBitmask.Set(inst);
     Mutex_Unlock(MPQueueLock);
 }
 
 void LocalMP::End(int inst)
 {
+    if (!ValidInstance(inst)) return;
     Mutex_Lock(MPQueueLock);
-    MPStatus.ConnectedBitmask &= ~(1 << inst);
+    MPStatus.ConnectedBitmask.Reset(inst);
+    LastHostIDs[inst] = -1;
+    Associated[inst] = false;
     Mutex_Unlock(MPQueueLock);
 }
 
@@ -93,7 +114,7 @@ void LocalMP::FIFORead(int inst, int fifo, void* buf, int len) noexcept
     else
     {
         offset = ReplyReadOffset[inst];
-        data = MPReplyQueue;
+        data = MPReplyQueue.get() + inst * kReplyQueueSize;
         datalen = kReplyQueueSize;
     }
 
@@ -110,7 +131,11 @@ void LocalMP::FIFORead(int inst, int fifo, void* buf, int len) noexcept
         offset += len;
     }
 
-    if (fifo == 0) PacketReadOffset[inst] = offset;
+    if (fifo == 0)
+    {
+        PacketReadOffset[inst] = offset;
+        PacketPendingBytes[inst] -= len;
+    }
     else           ReplyReadOffset[inst] = offset;
 }
 
@@ -127,8 +152,8 @@ void LocalMP::FIFOWrite(int inst, int fifo, void* buf, int len) noexcept
     }
     else
     {
-        offset = MPStatus.ReplyWriteOffset;
-        data = MPReplyQueue;
+        offset = MPStatus.ReplyWriteOffset[inst];
+        data = MPReplyQueue.get() + inst * kReplyQueueSize;
         datalen = kReplyQueueSize;
     }
 
@@ -146,12 +171,12 @@ void LocalMP::FIFOWrite(int inst, int fifo, void* buf, int len) noexcept
     }
 
     if (fifo == 0) MPStatus.PacketWriteOffset = offset;
-    else           MPStatus.ReplyWriteOffset = offset;
+    else           MPStatus.ReplyWriteOffset[inst] = offset;
 }
 
 int LocalMP::SendPacketGeneric(int inst, u32 type, u8* packet, int len, u64 timestamp) noexcept
 {
-    if (len > kMaxFrameSize)
+    if (!ValidInstance(inst) || len < 0 || (u32)len > kMaxFrameSize || (len && !packet))
     {
         Log(LogLevel::Warn, "wifi: attempting to send frame too big (len=%d max=%d)\n", len, kMaxFrameSize);
         return 0;
@@ -159,9 +184,43 @@ int LocalMP::SendPacketGeneric(int inst, u32 type, u8* packet, int len, u64 time
 
     Mutex_Lock(MPQueueLock);
 
-    u16 mask = MPStatus.ConnectedBitmask;
+    const auto mask = MPStatus.ConnectedBitmask;
+    const u32 packetType = type & 0xFFFF;
+    const int host = LastHostIDs[inst];
+    if (packetType == 2 && !mask.Test(host))
+    {
+        Mutex_Unlock(MPQueueLock);
+        return 0;
+    }
 
-    // TODO: check if the FIFO is full!
+    if (packet && len >= 36 && ((FrameControl(packet, len) >> 2) & 3) != 1)
+        memcpy(LocalMACs[inst].data(), packet + 22, 6);
+    if (packetType == 0 && len >= 36)
+    {
+        const u16 fc = FrameControl(packet, len) & 0x00FC;
+        if (fc == 0 || fc == 0x20 || fc == 0xB0 || fc == 0xA0 || fc == 0xC0)
+        {
+            Associated[inst] = false;
+            LastHostIDs[inst] = -1;
+        }
+    }
+
+    // Recover only the lagging reader before unread data is overwritten.
+    const u32 frameBytes = sizeof(MPPacketHeader) + len;
+    if (packetType != 2)
+    {
+        for (int i = 0; i < kMaxLocalMPInstances; ++i)
+        {
+            if (!mask.Test(i)) continue;
+            if (PacketPendingBytes[i] + frameBytes > kPacketQueueSize)
+            {
+                PacketReadOffset[i] = MPStatus.PacketWriteOffset;
+                PacketPendingBytes[i] = 0;
+                ResetSemaphore(SemPool[i]);
+            }
+            PacketPendingBytes[i] += frameBytes;
+        }
+    }
 
     MPPacketHeader pktheader;
     pktheader.Magic = 0x4946494E;
@@ -172,69 +231,78 @@ int LocalMP::SendPacketGeneric(int inst, u32 type, u8* packet, int len, u64 time
 
     type &= 0xFFFF;
     int nfifo = (type == 2) ? 1 : 0;
-    FIFOWrite(inst, nfifo, &pktheader, sizeof(pktheader));
+    const int destination = type == 2 ? host : inst;
+    FIFOWrite(destination, nfifo, &pktheader, sizeof(pktheader));
     if (len)
-        FIFOWrite(inst, nfifo, packet, len);
+        FIFOWrite(destination, nfifo, packet, len);
 
     if (type == 1)
     {
-        // NOTE: this is not guarded against, say, multiple multiplay games happening on the same machine
-        // we would need to pass the packet's SenderID through the wifi module for that
-        MPStatus.MPHostinst = inst;
-        MPStatus.MPReplyBitmask = 0;
-        ReplyReadOffset[inst] = MPStatus.ReplyWriteOffset;
-        Semaphore_Reset(SemPool[16 + inst]);
+        LastHostIDs[inst] = -1;
+        Associated[inst] = false;
+        ReplyReadOffset[inst] = MPStatus.ReplyWriteOffset[inst];
+        ResetSemaphore(SemPool[kMaxLocalMPInstances + inst]);
     }
-    else if (type == 2)
-    {
-        MPStatus.MPReplyBitmask |= (1 << inst);
-    }
-
-    Mutex_Unlock(MPQueueLock);
 
     if (type == 2)
     {
-        Semaphore_Post(SemPool[16 +  MPStatus.MPHostinst]);
+        Semaphore_Post(SemPool[kMaxLocalMPInstances + host]);
     }
     else
     {
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < kMaxLocalMPInstances; i++)
         {
-            if (mask & (1<<i))
+            if (mask.Test(i))
                 Semaphore_Post(SemPool[i]);
         }
     }
 
+    // Posting and queue writes share the lock, including backlog resets.
+    Mutex_Unlock(MPQueueLock);
     return len;
 }
 
 int LocalMP::RecvPacketGeneric(int inst, u8* packet, bool block, u64* timestamp) noexcept
 {
+    if (!ValidInstance(inst) || !packet) return 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(RecvTimeout);
     for (;;)
     {
-        if (!Semaphore_TryWait(SemPool[inst], block ? RecvTimeout : 0))
+        const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+        if ((block && remaining <= 0) || !Semaphore_TryWait(SemPool[inst], block ? (int)remaining : 0))
         {
             return 0;
         }
 
         Mutex_Lock(MPQueueLock);
 
-        MPPacketHeader pktheader = {};
-        FIFORead(inst, 0, &pktheader, sizeof(pktheader));
+        // A waiter can have taken a token just before a backlog reset.
+        if (!PacketPendingBytes[inst])
+        {
+            Mutex_Unlock(MPQueueLock);
+            continue;
+        }
 
-        if (pktheader.Magic != 0x4946494E)
+        MPPacketHeader pktheader = {};
+        if (PacketPendingBytes[inst] >= sizeof(pktheader))
+            FIFORead(inst, 0, &pktheader, sizeof(pktheader));
+
+        if (pktheader.Magic != 0x4946494E || pktheader.Length > kMaxFrameSize ||
+            pktheader.Length > PacketPendingBytes[inst] || pktheader.SenderID >= kMaxLocalMPInstances)
         {
             Log(LogLevel::Warn, "PACKET FIFO OVERFLOW\n");
             PacketReadOffset[inst] = MPStatus.PacketWriteOffset;
-            Semaphore_Reset(SemPool[inst]);
+            PacketPendingBytes[inst] = 0;
+            ResetSemaphore(SemPool[inst]);
             Mutex_Unlock(MPQueueLock);
             return 0;
         }
 
-        if (pktheader.SenderID == inst)
+        if (pktheader.SenderID == (u32)inst)
         {
             // skip this packet
             PacketReadOffset[inst] += pktheader.Length;
+            PacketPendingBytes[inst] -= pktheader.Length;
             if (PacketReadOffset[inst] >= kPacketQueueSize)
                 PacketReadOffset[inst] -= kPacketQueueSize;
 
@@ -246,11 +314,35 @@ int LocalMP::RecvPacketGeneric(int inst, u8* packet, bool block, u64* timestamp)
         {
             FIFORead(inst, 0, packet, pktheader.Length);
 
-            if (pktheader.Type == 1)
-                LastHostID = pktheader.SenderID;
         }
 
-        if (timestamp) *timestamp = pktheader.Timestamp;
+        const bool hasMAC = pktheader.Length >= 36;
+        if (pktheader.Length >= 42 && pktheader.Timestamp && (FrameControl(packet, pktheader.Length) & 0x00FF) == 0x10 &&
+            memcmp(packet + 16, LocalMACs[inst].data(), 6) == 0 &&
+            packet[38] == 0 && packet[39] == 0 && (packet[40] || packet[41]))
+        {
+            Associated[inst] = true;
+            memcpy(HostMACs[inst].data(), packet + 22, 6);
+            LastHostIDs[inst] = pktheader.SenderID;
+        }
+
+        const bool foreign = Associated[inst] && (!hasMAC || memcmp(packet + 22, HostMACs[inst].data(), 6) != 0);
+        if (foreign && (pktheader.Type == 1 || pktheader.Type == 3))
+        {
+            Mutex_Unlock(MPQueueLock);
+            continue;
+        }
+        if (!foreign && ((Associated[inst] && hasMAC) || pktheader.Type == 1))
+            LastHostIDs[inst] = pktheader.SenderID;
+
+        // Keep other BSSs visible without adopting their parent clocks.
+        if (timestamp) *timestamp = foreign ? 0 : pktheader.Timestamp;
+        if ((FrameControl(packet, pktheader.Length) & 0x00FC) == 0xC0 &&
+            hasMAC && memcmp(packet + 16, LocalMACs[inst].data(), 6) == 0)
+        {
+            Associated[inst] = false;
+            LastHostIDs[inst] = -1;
+        }
         Mutex_Unlock(MPQueueLock);
         return pktheader.Length;
     }
@@ -283,34 +375,34 @@ int LocalMP::SendAck(int inst, u8* packet, int len, u64 timestamp)
 
 int LocalMP::RecvHostPacket(int inst, u8* packet, u64* timestamp)
 {
-    if (LastHostID != -1)
-    {
-        // check if the host is still connected
-
-        u16 curinstmask = MPStatus.ConnectedBitmask;
-
-        if (!(curinstmask & (1 << LastHostID)))
-            return -1;
-    }
+    if (!ValidInstance(inst)) return 0;
+    Mutex_Lock(MPQueueLock);
+    const int host = LastHostIDs[inst];
+    const bool lostHost = host >= 0 && !MPStatus.ConnectedBitmask.Test(host);
+    Mutex_Unlock(MPQueueLock);
+    if (lostHost) return -1;
 
     return RecvPacketGeneric(inst, packet, true, timestamp);
 }
 
 u16 LocalMP::RecvReplies(int inst, u8* packets, u64 timestamp, u16 aidmask)
 {
+    if (!ValidInstance(inst) || !packets) return 0;
     u16 ret = 0;
-    u16 myinstmask = (1 << inst);
-    u16 curinstmask;
+    InstanceMask myinstmask {};
+    myinstmask.Set(inst);
 
-    curinstmask = MPStatus.ConnectedBitmask;
+    Mutex_Lock(MPQueueLock);
+    const auto curinstmask = MPStatus.ConnectedBitmask;
+    Mutex_Unlock(MPQueueLock);
 
     // if all clients have left: return early
-    if ((myinstmask & curinstmask) == curinstmask)
+    if (myinstmask.Contains(curinstmask))
         return 0;
 
     for (;;)
     {
-        if (!Semaphore_TryWait(SemPool[16+inst], RecvTimeout))
+        if (!Semaphore_TryWait(SemPool[kMaxLocalMPInstances + inst], RecvTimeout))
         {
             // no more replies available
             return ret;
@@ -321,17 +413,19 @@ u16 LocalMP::RecvReplies(int inst, u8* packets, u64 timestamp, u16 aidmask)
         MPPacketHeader pktheader = {};
         FIFORead(inst, 1, &pktheader, sizeof(pktheader));
 
-        if (pktheader.Magic != 0x4946494E)
+        if (pktheader.Magic != 0x4946494E || pktheader.Length > 1024 || pktheader.SenderID >= kMaxLocalMPInstances)
         {
             Log(LogLevel::Warn, "REPLY FIFO OVERFLOW\n");
-            ReplyReadOffset[inst] = MPStatus.ReplyWriteOffset;
-            Semaphore_Reset(SemPool[16 + inst]);
+            ReplyReadOffset[inst] = MPStatus.ReplyWriteOffset[inst];
+            ResetSemaphore(SemPool[kMaxLocalMPInstances + inst]);
             Mutex_Unlock(MPQueueLock);
             return 0;
         }
 
-        if ((pktheader.SenderID == inst) || // packet we sent out (shouldn't happen, but hey)
-            (pktheader.Timestamp < (timestamp - 32))) // stale packet
+        const u32 aid = pktheader.Type >> 16;
+        if (pktheader.SenderID == (u32)inst ||
+            (timestamp > 32 && pktheader.Timestamp < timestamp - 32) ||
+            (pktheader.Length && (aid == 0 || aid > 15)))
         {
             // skip this packet
             ReplyReadOffset[inst] += pktheader.Length;
@@ -344,13 +438,12 @@ u16 LocalMP::RecvReplies(int inst, u8* packets, u64 timestamp, u16 aidmask)
 
         if (pktheader.Length)
         {
-            u32 aid = (pktheader.Type >> 16);
             FIFORead(inst, 1, &packets[(aid-1)*1024], pktheader.Length);
             ret |= (1 << aid);
         }
 
-        myinstmask |= (1 << pktheader.SenderID);
-        if (((myinstmask & curinstmask) == curinstmask) ||
+        myinstmask.Set(pktheader.SenderID);
+        if (myinstmask.Contains(curinstmask) ||
             ((ret & aidmask) == aidmask))
         {
             // all the clients have sent their reply

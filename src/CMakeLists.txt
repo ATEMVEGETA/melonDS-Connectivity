@@ -59,6 +59,8 @@ add_library(core STATIC
     Utils.cpp
     Utils.h
     Wifi.cpp
+    WifiLegacy.cpp
+    WifiRanger.cpp
     WifiAP.cpp
 
     DSP_HLE/UcodeBase.cpp

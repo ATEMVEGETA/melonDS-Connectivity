@@ -39,6 +39,9 @@
 #include "Platform.h"
 #include "Net.h"
 #include "MPInterface.h"
+#include "RadioIdentity.h"
+#include "WiiDSBridge.h"
+#include "WifiProfileSelection.h"
 
 #include "NDS.h"
 #include "DSi.h"
@@ -62,6 +65,12 @@ MainWindow* topWindow = nullptr;
 
 const string kWifiSettingsPath = "wfcsettings.bin";
 extern Net net;
+
+static RadioIdentityRegistry& RadioIdentities()
+{
+    static RadioIdentityRegistry registry;
+    return registry;
+}
 
 
 EmuInstance::EmuInstance(int inst) : deleting(false),
@@ -129,6 +138,8 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
 
     net.RegisterInstance(instanceID);
 
+    applyWiiDSSettings();
+
     emuThread = new EmuThread(this);
 
     numWindows = 0;
@@ -160,6 +171,9 @@ EmuInstance::~EmuInstance()
     emuThread->wait();
     delete emuThread;
 
+    Platform::IRClose(this);
+    WiiDSBridge::Release(this);
+
     net.UnregisterInstance(instanceID);
 
     audioDeInit();
@@ -170,6 +184,7 @@ EmuInstance::~EmuInstance()
         saveRTCData();
         delete nds;
     }
+    RadioIdentities().Release(instanceID);
 }
 
 
@@ -180,6 +195,26 @@ std::string EmuInstance::instanceFileSuffix()
     char suffix[16] = {0};
     snprintf(suffix, 15, ".%d", instanceID+1);
     return suffix;
+}
+
+void EmuInstance::applyWiiDSSettings()
+{
+    const bool automatic = !wiiDSLaunchOverride.has_value() && localCfg.GetBool("WiiDS.Automatic");
+    const bool enabled = wiiDSLaunchOverride.value_or(localCfg.GetBool("WiiDS.Enabled"));
+    const bool wasEnabled = WiiDSBridge::IsEnabled(this);
+    const bool configured = automatic
+        ? WiiDSBridge::ConfigureAutomatic(this, true, localCfg.GetBool("WiiDS.Diagnostics"))
+        : WiiDSBridge::Configure(this, enabled, localCfg.GetBool("WiiDS.Diagnostics"));
+    if (!configured)
+        Platform::Log(Platform::LogLevel::Warn, "Unable to configure Wii-DS bridge\n");
+    else if (!automatic && enabled && !wasEnabled)
+        MPInterface::Get().End(instanceID);
+}
+
+void EmuInstance::setWiiDSLaunchOverride(std::optional<bool> enabled)
+{
+    wiiDSLaunchOverride = enabled;
+    applyWiiDSSettings();
 }
 
 void EmuInstance::createWindow(int id)
@@ -1254,6 +1289,8 @@ bool EmuInstance::updateConsole() noexcept
         nextndscart = std::move(nextCart);
         changeCart = false;
     }
+    const auto profile = WifiProfileForGameCode(nextndscart
+        ? std::string_view(nextndscart->GetHeader().GameCode, 4) : std::string_view{});
 
     if (auto* cartsd = dynamic_cast<NDSCart::CartSD*>(nextndscart.get()))
     {
@@ -1369,6 +1406,7 @@ bool EmuInstance::updateConsole() noexcept
         else
             nds = new NDS(std::move(ndsargs), this);
 
+        nds->Wifi.RequestProfile(profile);
         nds->Reset();
         loadRTCData();
         //emuThread->updateVideoRenderer(); // not actually needed?
@@ -1400,6 +1438,7 @@ bool EmuInstance::updateConsole() noexcept
     }
 
     // loads the carts later -- to be sure that everything else is initialized
+    nds->Wifi.RequestProfile(profile);
     nds->SetNDSCart(std::move(nextndscart));
     if (consoleType == 1)
         nds->EjectGBACart();
@@ -1752,17 +1791,25 @@ void EmuInstance::customizeFirmware(Firmware& firmware, bool overridesettings) n
         }
     }
 
-    if (instanceID > 0)
+    const unsigned radioID = WiiDSBridge::IsDiscoverable(this)
+        ? WiiDSBridge::IdentitySlot(this) : unsigned(instanceID);
+    if (radioID > 0)
     {
         rep = true;
-        mac[3] += instanceID;
-        mac[4] += instanceID*0x44;
-        mac[5] += instanceID*0x10;
+        mac[3] += radioID;
+        mac[4] += radioID*0x44;
+        mac[5] += radioID*0x10;
     }
 
     if (rep)
     {
         mac[0] &= 0xFC; // ensure the MAC isn't a broadcast MAC
+    }
+    if (!RadioIdentities().Reserve(instanceID, mac))
+        Log(Error, "Could not reserve this instance's local wireless MAC\n");
+    rep |= mac != header.MacAddr;
+    if (rep)
+    {
         header.MacAddr = mac;
         header.UpdateChecksum();
     }
@@ -1872,6 +1919,12 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
     std::string romname;
 
     if (!loadROMData(filepath, filedata, filelen, basepath, romname))
+    {
+        errorstr = "Failed to load the DS ROM.";
+        return false;
+    }
+
+    if (filelen < 16)
     {
         errorstr = "Failed to load the DS ROM.";
         return false;

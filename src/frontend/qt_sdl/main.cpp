@@ -59,6 +59,7 @@
 #include "CameraManager.h"
 #include "MPInterface.h"
 #include "Net.h"
+#include "InstanceMask.h"
 
 #include "CLI.h"
 
@@ -72,7 +73,7 @@ QString* systemThemeName;
 
 QString emuDirectory;
 
-const int kMaxEmuInstances = 16;
+const int kMaxEmuInstances = kMaxLocalInstances;
 EmuInstance* emuInstances[kMaxEmuInstances];
 
 CameraManager* camManager[2];
@@ -357,6 +358,8 @@ int main(int argc, char** argv)
     NetInit();
 
     createEmuInstance();
+
+    emuInstances[0]->setWiiDSLaunchOverride(options->wiiDS);
 
     {
         MainWindow* win = emuInstances[0]->getMainWindow();

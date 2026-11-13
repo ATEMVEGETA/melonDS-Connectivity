@@ -90,11 +90,11 @@ public:
     {
         MessageType type;
         QVariant param;
+        bool notifyCaller = true;
     };
 
     void sendMessage(Message msg);
     void waitMessage(int num = 1);
-    void waitAllMessages();
 
     void sendMessage(MessageType type)
     {

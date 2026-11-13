@@ -298,6 +298,7 @@ void WriteDateTime(int year, int month, int day, int hour, int minute, int secon
 // packet type: DS-style TX header (12 bytes) + original 802.11 frame
 void MP_Begin(void* userdata);
 void MP_End(void* userdata);
+bool MP_EventCompatibilityActive(void* userdata);
 int MP_SendPacket(u8* data, int len, u64 timestamp, void* userdata);
 int MP_RecvPacket(u8* data, u64* timestamp, void* userdata);
 int MP_SendCmd(u8* data, int len, u64 timestamp, void* userdata);
@@ -312,6 +313,10 @@ u16 MP_RecvReplies(u8* data, u64 timestamp, u16 aidmask, void* userdata);
 int Net_SendPacket(u8* data, int len, void* userdata);
 int Net_RecvPacket(u8* data, void* userdata);
 using SendPacketCallback = std::function<void(const u8* data, int len)>;
+
+u8 IRSendPacket(char* data, int len, void* userdata);
+u8 IRReceivePacket(char* data, int len, void* userdata);
+void IRClose(void* userdata);
 
 
 // interface for camera emulation

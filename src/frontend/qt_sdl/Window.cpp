@@ -61,6 +61,7 @@
 #include "PathSettingsDialog.h"
 #include "MPSettingsDialog.h"
 #include "WifiSettingsDialog.h"
+#include "IRSettingsDialog.h"
 #include "InterfaceSettingsDialog.h"
 #include "ROMInfoDialog.h"
 #include "RAMInfoDialog.h"
@@ -643,6 +644,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actWifiSettings = menu->addAction("Wifi settings");
             connect(actWifiSettings, &QAction::triggered, this, &MainWindow::onOpenWifiSettings);
 
+            actIRSettings = menu->addAction("IR settings");
+            connect(actIRSettings, &QAction::triggered, this, &MainWindow::onOpenIRSettings);
+
             actFirmwareSettings = menu->addAction("Firmware settings");
             connect(actFirmwareSettings, &QAction::triggered, this, &MainWindow::onOpenFirmwareSettings);
 
@@ -786,7 +790,6 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actEmuSettings->setEnabled(false);
             actVideoSettings->setEnabled(false);
             actMPSettings->setEnabled(false);
-            actWifiSettings->setEnabled(false);
             actInterfaceSettings->setEnabled(false);
 
 #ifdef __APPLE__
@@ -2012,10 +2015,37 @@ void MainWindow::onMPSettingsFinished(int res)
 
 void MainWindow::onOpenWifiSettings()
 {
+    // The dialog owns one instance's pause and local Wii-link preferences.
+    // Reusing it from another window must not pause/connect that window too.
+    if (WifiSettingsDialog::currentDlg)
+    {
+        WifiSettingsDialog::currentDlg->raise();
+        WifiSettingsDialog::currentDlg->activateWindow();
+        return;
+    }
+
     emuThread->emuPause();
 
     WifiSettingsDialog* dlg = WifiSettingsDialog::openDlg(this);
     connect(dlg, &WifiSettingsDialog::finished, this, &MainWindow::onWifiSettingsFinished);
+}
+
+void MainWindow::onOpenIRSettings()
+{
+    if (IRSettingsDialog::currentDlg)
+    {
+        IRSettingsDialog::currentDlg->raise();
+        IRSettingsDialog::currentDlg->activateWindow();
+        return;
+    }
+    emuThread->emuPause();
+    auto* dlg = IRSettingsDialog::openDlg(this);
+    connect(dlg, &IRSettingsDialog::finished, this, &MainWindow::onIRSettingsFinished);
+}
+
+void MainWindow::onIRSettingsFinished(int res)
+{
+    emuThread->emuUnpause();
 }
 
 void MainWindow::onWifiSettingsFinished(int res)

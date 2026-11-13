@@ -44,6 +44,7 @@
 #include "Wifi.h"
 #include "Platform.h"
 #include "LocalMP.h"
+#include "WiiDSBridge.h"
 #include "Config.h"
 #include "RTC.h"
 #include "DSi.h"
@@ -155,6 +156,7 @@ void EmuThread::run()
     {
         if (emuInstance->instanceID == 0)
             MPInterface::Get().Process();
+        WiiDSBridge::Process(emuInstance); // Discover Dolphin even without a ROM or while paused.
 
         emuInstance->inputProcess();
 
@@ -456,6 +458,8 @@ void EmuThread::run()
 
 void EmuThread::sendMessage(Message msg)
 {
+    // Guest power-off and emulation-thread hotkeys do not have a waiting caller.
+    msg.notifyCaller = QThread::currentThread() != this;
     msgMutex.lock();
     msgQueue.enqueue(msg);
     msgMutex.unlock();
@@ -467,21 +471,18 @@ void EmuThread::waitMessage(int num)
     msgSemaphore.acquire(num);
 }
 
-void EmuThread::waitAllMessages()
-{
-    if (QThread::currentThread() == this) return;
-    while (!msgQueue.empty())
-        msgSemaphore.acquire();
-}
-
 void EmuThread::handleMessages()
 {
     bool glborrow = false;
 
-    msgMutex.lock();
-    while (!msgQueue.empty())
+    for (;;)
     {
-        Message msg = msgQueue.dequeue();
+        Message msg;
+        {
+            QMutexLocker lock(&msgMutex);
+            if (msgQueue.empty()) break;
+            msg = msgQueue.dequeue();
+        }
         switch (msg.type)
         {
         case msg_Exit:
@@ -489,6 +490,7 @@ void EmuThread::handleMessages()
             emuPauseStack = emuPauseStackRunning;
 
             emuInstance->audioDisable();
+            WiiDSBridge::ResetRadio(emuInstance);
             MPInterface::Get().End(emuInstance->instanceID);
             break;
 
@@ -533,9 +535,13 @@ void EmuThread::handleMessages()
             break;
 
         case msg_EmuStop:
-            if (msg.param.value<bool>())
+            if (msg.param.value<bool>() && emuInstance->nds)
                 emuInstance->nds->Stop();
+            WiiDSBridge::ResetRadio(emuInstance);
+            MPInterface::Get().End(emuInstance->instanceID);
             emuStatus = emuStatus_Paused;
+            prevEmuStatus = emuStatus_Paused;
+            emuPauseStack = emuPauseStackRunning;
             emuActive = false;
 
             emuInstance->audioDisable();
@@ -576,6 +582,7 @@ void EmuThread::handleMessages()
 
         case msg_BootROM:
             msgResult = 0;
+            msgError.clear();
             if (!emuInstance->loadROM(msg.param.value<QStringList>(), true, msgError))
                 break;
 
@@ -586,6 +593,7 @@ void EmuThread::handleMessages()
 
         case msg_BootFirmware:
             msgResult = 0;
+            msgError.clear();
             if (!emuInstance->bootToMenu(msgError))
                 break;
 
@@ -662,9 +670,8 @@ void EmuThread::handleMessages()
             break;
         }
 
-        msgSemaphore.release();
+        if (msg.notifyCaller) msgSemaphore.release();
     }
-    msgMutex.unlock();
 
     if (glborrow)
     {
@@ -745,15 +752,16 @@ void EmuThread::emuStop(bool external)
 void EmuThread::emuExit()
 {
     sendMessage(msg_Exit);
-    waitAllMessages();
+    waitMessage();
 }
 
 void EmuThread::emuFrameStep()
 {
-    if (emuPauseStack < emuPauseStackPauseThreshold)
+    const bool pauseFirst = emuPauseStack < emuPauseStackPauseThreshold;
+    if (pauseFirst)
         sendMessage(msg_EmuPause);
     sendMessage(msg_EmuFrameStep);
-    waitAllMessages();
+    waitMessage(pauseFirst ? 2 : 1);
 }
 
 void EmuThread::emuReset()
@@ -778,7 +786,7 @@ int EmuThread::bootROM(const QStringList& filename, QString& errorstr)
     waitMessage();
     if (!msgResult)
     {
-        errorstr = msgError;
+        errorstr = msgError.isEmpty() ? QStringLiteral("Failed to load the DS ROM.") : msgError;
         return msgResult;
     }
 

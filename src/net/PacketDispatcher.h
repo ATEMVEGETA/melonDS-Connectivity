@@ -24,6 +24,7 @@
 #include "Platform.h"
 #include "types.h"
 #include "FIFO.h"
+#include "InstanceMask.h"
 
 using PacketQueue = melonDS::RingBuffer<0x8000>;
 
@@ -38,13 +39,12 @@ public:
 
     void clear();
 
-    void sendPacket(const void* header, int headerlen, const void* data, int datalen, int sender, melonDS::u16 recv_mask);
+    void sendPacket(const void* header, int headerlen, const void* data, int datalen, int sender, const melonDS::InstanceMask& recv_mask);
     bool recvPacket(void* header, int* headerlen, void* data, int* datalen, int receiver);
 
 private:
     melonDS::Platform::Mutex* mutex;
-    melonDS::u16 instanceMask;
-    std::array<std::unique_ptr<PacketQueue>, 16> packetQueues {};
+    std::array<std::unique_ptr<PacketQueue>, melonDS::kMaxLocalInstances> packetQueues {};
 };
 
 #endif // PACKETDISPATCHER_H
