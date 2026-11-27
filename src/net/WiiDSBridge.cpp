@@ -7,6 +7,7 @@
 #include "WiiDSBridge.h"
 #include "WiiDSBeacon.h"
 #include "WiiDSMPConfig.h"
+#include "WiiDSLanConfig.h"
 #include "Platform.h"
 #include <algorithm>
 #include <atomic>
@@ -184,6 +185,7 @@ explicit Context(void* owner) : Owner(owner), ContextID(++NextContextID) {}
 ~Context() { CloseDiagnostic(); if (Listener != InvalidSocket) CloseSocket(Listener); }
 void* Owner;
 u64 ContextID;
+const WiiDSLan::Config Transport = WiiDSLan::FromEnvironment();
 bool Diagnostics = false;
 bool DiagnosticFileFull = false;
 std::unique_ptr<DiagnosticSink> DiagnosticFile;
@@ -357,6 +359,7 @@ bool SamePeer(const sockaddr_in& sender)
 }
 void EnsureSocket()
 {
+    if (!Transport.valid) return;
     if (Listener != InvalidSocket) return;
     const auto now = Platform::GetMSCount();
     if (LastBind && now - LastBind < 1000) return;
@@ -377,7 +380,8 @@ void EnsureSocket()
                reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
 #endif
     sockaddr_in address{};
-    address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(Transport.IsLocal() ? INADDR_LOOPBACK : INADDR_ANY);
     address.sin_port = htons(port);
     if (::bind(socket, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
     {
@@ -540,7 +544,9 @@ void Pump()
             }
             break;
         }
-        if (sender.sin_family != AF_INET || sender.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) continue;
+        const auto& ip = Transport.peer;
+        const u32 allowed = (u32(ip[0]) << 24) | (u32(ip[1]) << 16) | (u32(ip[2]) << 8) | ip[3];
+        if (sender.sin_family != AF_INET || sender.sin_addr.s_addr != htonl(allowed)) continue;
         if (received == static_cast<int>(sizeof(Hello)-1) && !std::memcmp(packet.data(), Hello, sizeof(Hello)-1))
         {
             if (HavePeer && !SamePeer(sender)) continue; // A second Dolphin cannot silently take over.
